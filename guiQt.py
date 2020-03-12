@@ -1,125 +1,193 @@
 import os
 import cmath
+import sys
 import tkinter
 import dataStruct
 import pyqtgraph
 from tkinter import filedialog
 import matplotlib
-from matplotlib import font_manager as fm
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg#, NavigationToolbar2TkAgg
-from matplotlib.figure import Figure
-import matplotlib.pyplot as plt
 import numpy as np
 import cv2
 import pdb
 from pyqtgraph.Qt import QtGui, QtWidgets
-from PyQt5.QtWidgets import QPushButton, QApplication, QWidget, QVBoxLayout, QGroupBox, QLineEdit, QTableWidget, QTableWidgetItem
+from PyQt5.QtWidgets import QPushButton, QApplication, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout, QGroupBox, QLineEdit, QTextEdit, QTableWidget, QTableWidgetItem, QSlider, QLabel, QFileDialog
 import pyqtgraph as pg
-
-#dataText = '/media/group/hyper/archive/Measured_Data/2016_06_21/20160621_081835.mat'
+import pyqtgraph.exporters
+import pickle
+import customImageView
+from customDebug import set_trace
 dataText = '/raid/home/extern/rovedo/radial_recon/JK_radial_incLoopCoil/'
-matplotlib.use("TkAgg")
-matplotlib.rcParams.update({'font.size' : 10, 'figure.autolayout': True})
-matplotlib.rcParams['font.family'] = 'sans-serif'
-matplotlib.rcParams['font.sans-serif'] = ['Helvetica']#, 'DejaVu Sans']
-#matplotlib.pyplot.tight_layout()
 class mainWindow():
         def __init__(self):
-
+                self.overrideType = 0
+                self.datasets = []
+                self.filetype = 'png'
                 self.scanNumber = 4 
                 self.selectedDataset = 1
-                self.datasets = 0
+                self.ndatasets = 0
                 self.lowerLimit = 100
                 self.upperLimit = 200
                 self.roiChanged = 0
-
-                #main figures
-                DPI = 100
-                heightMM = 160.0
-                widthMM = 280.0
-
+                self.runtimeFolder = dataText
+#########Main window
                 self.app = QtGui.QApplication([])
-                #self.window = QWidget()
                 self.window = pg.GraphicsWindow(title="Thickness calculations")
                 greyValue = 200
                 self.window.setBackground((greyValue,greyValue,greyValue))
+############Plot regions and layout
                 self.fullPlot = pg.ImageView()
-                self.fullPlot.fullRoi = self.fullPlot.getRoiPlot()
+                self.fullPlot.ui.roiBtn.hide()
+                self.fullPlot.ui.menuBtn.hide()
+
+                self.roiPlot = customImageView.customImageView(self)
+                self.roiPlot.ui.roiBtn.hide()
+                self.roiPlot.ui.menuBtn.hide()
+
+                self.edgePlot = pg.ImageView()
+                self.edgePlot.ui.roiBtn.hide()
+                self.edgePlot.ui.menuBtn.hide()
+                self.edgePlot.ui.histogram.hide()
+
+                self.resultPlot = pg.PlotWidget()
+#########Roi generation and functions for full plot
                 self.roi = pg.ROI([200,200],[100,100])
                 self.roi.addScaleHandle([1,1], [0,0])
                 self.roi.addScaleHandle([1,0], [0,1])
                 self.roi.addScaleHandle([0,1], [1,0])
                 self.roi.addScaleHandle([0,0], [1,1])
+                self.roiClipboard = pg.ROI([200,200],[100,100])
+                #self.fullPlot.fullRoi = self.fullPlot.getRoiPlot()
+                self.fullPlot.fullRoi = self.roi
                 def updateRoi():
-                    if self.datasets:
+                    if self.ndatasets:
                         self.roiChanged = 1
-                        self.guiData.rois[self.selectedDataset] = [self.roi.pos()[1] , self.roi.pos()[0], self.roi.size()[1], self.roi.size()[0]]
                         self.plotWindow(0)
-                    #print('roi changed')
-                def updateEdges():
-                    if self.datasets:
-                        self.findCurrentEdges()
+                def updateRoiEnd():
+                    if self.ndatasets:
+                        for index, currentImage in enumerate(self.datasets[self.selectedDataset].data):
+                            if self.datasets[self.selectedDataset].loaded[index] and self.roiChanged:
+                                self.findCurrentEdges(index)
+                        self.datasets[self.selectedDataset].roi = self.fullPlot.fullRoi.saveState()
+                        self.roiChanged = 0
                         self.plotWindow(0)
                 self.roi.sigRegionChanged.connect(updateRoi)
-                self.roi.sigRegionChangeFinished.connect(updateEdges)
+                self.roi.sigRegionChangeFinished.connect(updateRoiEnd)
                 self.fullPlot.addItem(self.roi)
-                self.fullPlot.fullRoi = self.roi
-
-                self.roiPlot = pg.ImageView()
-                self.edgePlot = pg.ImageView()
-                self.resultPlot = pg.PlotWidget()
-                #self.Roi = pg.LineSegmentROI([10,20], [110,100], pen='r')
-                #self.fullPlot.addItem(self.Roi)
-
-                self.layout = QVBoxLayout()
-                self.layout.setDirection(2)
-                self.layout.addWidget(self.fullPlot)  # plot goes on right side, spanning 3 rows
-                self.layout.addWidget(self.roiPlot)  # plot goes on right side, spanning 3 rows
-                self.layout.addWidget(self.edgePlot)  # plot goes on right side, spanning 3 rows
-                self.layout.addWidget(self.resultPlot)
-                #self.layout.addPlot()
-                #self.layout.addWidget(self.resultPlot)
-#Buttons layout
-                self.buttonGroupBox = QGroupBox('buttons')
-                self.buttonLayout = QVBoxLayout()
-                self.buttonLayout.setDirection(0)
-                self.buttonGroupBox.setLayout(self.buttonLayout)
-
-                self.leftButtonBox = QGroupBox()
+#############Buttons layout
+                self.buttonLayout = QGridLayout()
+             #Data Handling
+                self.leftButtonBox = QGroupBox('Data Handling')
                 self.leftButtonLayout = QVBoxLayout()
-                self.leftButtonLayout.setDirection(2)
 
+                self.browseButton = QPushButton('Browse directories...')
+                self.browseButton.clicked.connect(self.browseCallback)
+                self.leftButtonLayout.addWidget(self.browseButton)
                 self.searchDataButton = QPushButton('Search Data')
                 self.searchDataButton.clicked.connect(self.searchDataCallback)
                 self.leftButtonLayout.addWidget(self.searchDataButton)
                 self.loadAllDataButton = QPushButton('Load All Data')
-                self.loadAllDataButton.clicked.connect(self.loadAllDataCallback)
+                self.loadAllDataButton.clicked.connect(self.loadAllDataCallback)#AllDataCallback)
                 self.leftButtonLayout.addWidget(self.loadAllDataButton)
                 self.leftButtonBox.setLayout(self.leftButtonLayout)
-
-                self.rightButtonBox = QGroupBox()
-                self.rightButtonLayout = QVBoxLayout()
-                self.rightButtonLayout.setDirection(2)
                 self.upButton = QPushButton('up')
                 self.upButton.clicked.connect(self.raiseScanCallback)
                 self.downButton = QPushButton('down')
                 self.downButton.clicked.connect(self.lowerScanCallback)
-                self.rightButtonLayout.addWidget(self.upButton)
-                self.rightButtonLayout.addWidget(self.downButton)
+                self.leftButtonLayout.addWidget(self.upButton)
+                self.leftButtonLayout.addWidget(self.downButton)
+            #RoiManipulationBox
+                self.roiButtonBox = QGroupBox('Roi Manipulation')
+                self.roiButtonBoxLayout = QGridLayout()
+                self.roiButtonBox.setLayout(self.roiButtonBoxLayout)
+
+                self.copyButton = QPushButton('Copy Roi')
+                self.copyButton.clicked.connect(self.copyRoiCallback)
+                self.roiButtonBoxLayout.addWidget(self.copyButton, 0, 0,)
+
+                self.pasteButton = QPushButton('Paste Roi')
+                self.pasteButton.clicked.connect(self.pasteRoiCallback)
+                self.roiButtonBoxLayout.addWidget(self.pasteButton, 1, 0)
+                self.pasteToAllButton = QPushButton('Paste Roi to All')
+                self.pasteToAllButton.clicked.connect(self.pasteRoiToAll)
+                self.roiButtonBoxLayout.addWidget(self.pasteToAllButton, 2, 0)
+
+                self.saveButton = QPushButton('Save Roi')
+                self.saveButton.clicked.connect(self.saveRoiCallback)
+                self.roiButtonBoxLayout.addWidget(self.saveButton, 3, 0)
+                self.saveAllButton = QPushButton('Save all Rois')
+                self.saveAllButton.clicked.connect(self.saveAllRoisCallback)
+                self.roiButtonBoxLayout.addWidget(self.saveAllButton, 4, 0)
+                self.leftButtonLayout.addWidget(self.roiButtonBox)
+            #Calculations
+                self.rightButtonBox = QGroupBox('Calculations')
+                self.rightButtonLayout = QGridLayout()
                 self.rightButtonBox.setLayout(self.rightButtonLayout)
 
                 self.calculateThicknessButton = QPushButton('Calculate Thickness')
                 self.calculateThicknessButton.clicked.connect(self.calculateThickness)
-                self.rightButtonLayout.addWidget(self.calculateThicknessButton)
-                self.calculateAllThicknessesButton = QPushButton('Calculate all Thicknessses')
-                self.calculateAllThicknessesButton.clicked.connect(self.calculateAllThicknesses)
-                self.rightButtonLayout.addWidget(self.calculateAllThicknessesButton)
-                #self.upButton = QPushButton('up')
-                #Jself.upButton.clicked.connect(self.raiseScanCallback)
+                self.rightButtonLayout.addWidget(self.calculateThicknessButton, 3,0, 1, 2)
 
+                self.calculateAllThicknessesButton = QPushButton('Calculate all Thicknesses')
+                self.calculateAllThicknessesButton.clicked.connect(self.calculateAllThicknesses)
+                self.rightButtonLayout.addWidget(self.calculateAllThicknessesButton, 4, 0, 1, 2)
+
+                self.saveToTextBox = QLineEdit()
+                self.saveToTextBox.setText('../60')
+                self.rightButtonLayout.addWidget(self.saveToTextBox, 5, 0, 1, 2)
+
+                self.savePlotsButton = QPushButton('Save Plots')
+                self.savePlotsButton.clicked.connect(self.savePlotsCallback)
+                self.rightButtonLayout.addWidget(self.savePlotsButton, 6, 0, 1, 2)
+#############Sliders for edge detection limits
+                self.lowerLimitSlider = QSlider()
+                self.lowerLimitLabel = QLabel()
+                self.upperLimitSlider = QSlider()
+                self.upperLimitLabel = QLabel()
+
+                self.lowerLimitSlider.setOrientation(1)
+                self.lowerLimitSlider.setMaximum(255)
+                self.lowerLimitSlider.setValue(self.lowerLimit)
+                self.lowerLimitSlider.valueChanged.connect(self.setEdgeLimits)
+
+                self.upperLimitSlider.setOrientation(1)
+                self.upperLimitSlider.setMaximum(255)
+                self.upperLimitSlider.setValue(self.upperLimit)
+                self.upperLimitSlider.valueChanged.connect(self.setEdgeLimits)
+
+                self.rightButtonLayout.addWidget(self.lowerLimitSlider, 7, 0)
+                self.rightButtonLayout.addWidget(self.lowerLimitLabel, 7, 1)
+                self.rightButtonLayout.addWidget(self.upperLimitSlider, 8, 0)
+                self.rightButtonLayout.addWidget(self.upperLimitLabel, 8, 1)
+                
+                self.upperLimitLabel.setNum(self.upperLimitSlider.value())
+                self.lowerLimitLabel.setNum(self.lowerLimitSlider.value())
+
+                self.buttonLayout.addWidget(self.leftButtonBox, 1, 0)
+                self.buttonLayout.addWidget(self.rightButtonBox, 1,1)
+##########Slider for scan selection
+                self.scanSliderBox = QGroupBox('Scan Number')
+                self.scanSlider = QSlider()
+                self.scanSliderLabel = QLineEdit()
+                self.scanSliderLabel.textEdited.connect(self.textEditedCallback)
+                self.scanSliderLabel.setMaximumWidth(30)
+                self.scanSliderLabel.setText(str(self.scanNumber))
+                self.scanSlider.setOrientation(1)
+                self.scanSlider.setMaximum(1)
+                self.scanSlider.setValue(0)
+                self.scanSlider.valueChanged.connect(self.scanSliderCallback)
+                self.scanSliderLayout = QGridLayout()
+                self.scanSliderLayout.addWidget(self.scanSlider, 0,0)
+                self.scanSliderLayout.addWidget(self.scanSliderLabel, 0,1)
+                self.scanSlider.setFixedHeight(50)
+                self.scanSliderBox.setMaximumHeight(100)
+                self.scanSliderBox.setLayout(self.scanSliderLayout)
+
+                self.buttonLayout.addWidget(self.scanSliderBox,0,0,1,2)
+                #self.buttonLayout.addLayout(self.scanSliderLayout,0,0,1,2)
+
+###########Path to data
                 self.dataTextBox = QLineEdit()
                 self.dataTextBox.setText(dataText)
-                
                 self.scanNumberTextBox = QLineEdit()
                 self.scanNumberTextBox.setText(str(self.scanNumber))
                 self.datasetList = QTableWidget()
@@ -128,269 +196,284 @@ class mainWindow():
                 self.datasetList.setColumnWidth(0, 500)
                 self.datasetList.itemSelectionChanged.connect(self.setDatasetCallback)
                 self.datasetList.resizeRowsToContents()
+           #####Main layout
+                self.layout = QGridLayout() #main layout for window
+                self.layout.setColumnMinimumWidth(0, 800)
+                self.layout.addWidget(self.fullPlot, 0, 0, 2, 1)
+                self.layout.addWidget(self.edgePlot, 1, 1)
+                self.layout.addWidget(self.roiPlot, 0, 1)
+                self.layout.addWidget(self.resultPlot, 2, 0, 2 ,2)
+                self.layout.setRowMinimumHeight(3, 400)
+                self.layout.addWidget(self.dataTextBox, 2, 2, 1, 1)
+                self.layout.addLayout(self.buttonLayout, 3,2)
 
-                
-                self.layout.addWidget(self.buttonGroupBox)
-                self.buttonLayout.addWidget(self.leftButtonBox)
-                self.buttonLayout.addWidget(self.rightButtonBox)
-                self.layout.addWidget(self.dataTextBox)
-                self.layout.addWidget(self.datasetList)
-                #self.layout.addWidget(self.leftButtonBox)
-                
-                #QPushButton
-                #layout.addWidget(plot, 0, 1, 1, 1)  # plot goes on right side, spanning 3 rows
+                self.layout.addWidget(self.datasetList, 0, 2, 2, 1)
                 self.window.setLayout(self.layout)
                 self.window.show()
-                #w.show()
-
-                ## Start the Qt event loop
-
-
-                #self.datasetList = tkinter.Listbox(self.top)
-                #self.datasetList.grid(row=8, column=4, sticky = tkinter.W + tkinter.E)#, selectmode=EXTENDED)
-                #def onSelection(event):
-                #    eventWidget = event.widget
-                #    self.selectedDataset = int(eventWidget.curselection()[0])
-                #    print(self.selectedDataset)
-                #    #self.plotWindow()
-                #self.datasetList.bind('<<ListboxSelect>>', print('selected'))
-                #self.datasetList.bind('<<ListboxSelect>>', onSelection)
-
-                ###close main Window
-                ##invoke main window
-                self.app.exec_()
-                #self.top.mainloop()
+                sys.exit(self.app.exec_())
         def browseCallback(self):
                 newDataFile = ''
                 if self.runtimeFolder:
-                    newDataFile =  filedialog.askopenfilename(initialdir = self.runtimeFolder, title = 'Please select a file')
+                    newDataFile =  QFileDialog.getExistingDirectory(None, 'Please select a data directory', self.runtimeFolder )
                 else:
-                    newDataFile =  filedialog.askopenfilename(initialdir = '/raid/home/extern/rovedo/radial_recon/', title = 'Please select a data directory')
-                self.runtimeFolder = os.path.dirname(newDataFile)
+                    newDataFile =  QFileDialog.getExistingDirectory(None, 'Please select a data directory', '/raid/home/extern/rovedo/radial_recon/' )
+                if newDataFile:
+                    print(newDataFile)
+                    self.runtimeFolder = newDataFile#os.path.dirname(newDataFile)
+                    print(self.runtimeFolder)
+                else:
+                    self.runtimeFolder = ''
                 self.saveString = self.runtimeFolder
-                self.dataTextBox.delete("1.0", tkinter.END)
-                self.dataTextBox.insert(tkinter.END, newDataFile)
-                self.saveStringTextBox.delete("1.0", tkinter.END)
-                self.saveStringTextBox.insert(tkinter.END, self.saveString)
+                self.dataTextBox.setText(self.runtimeFolder)
+                self.searchDataCallback()
+        def readAllSets(self):
+                self.findDataDirs()
+                setNumber = 0
+                for currentSet in self.rootFolders:
+                    images = []
+                    edgeDataRow = []
+                    for imageFile in self.imageFiles[setNumber]:
+                        images.append(cv2.imread(os.path.join(currentSet, 'images', imageFile)))
+                        edgeDataRow.append(np.zeros(2))
+                    setNumber += 1
+                    self.data.append(images)
+                    self.edgeData.append(edgeDataRow)
+        def findDataDirs(self):
+                if self.overrideType != 0:
+                        self.filetype = 'png' #read from text field later
+                self.datasets = []
+                for root, dirs, files in os.walk(self.runtimeFolder):
+                    if "images" in dirs:
+                        self.datasets.append(dataStruct.data(root))
+                self.nImagesets = len(self.datasets)
+                #for currentSet in np.arange(self.nImagesets):
+                for currentSet in self.datasets:
+                    currentSet.imageFiles = [files for files in os.listdir(os.path.join(currentSet.rootFolder, "images" )) if files.endswith('.'+ self.filetype)]
+                localRoi = 0
+                if localRoi:
+                    self.roi = localRoi
+                else:
+                    self.roi = pg.ROI([200,200],[100,100]).saveState()
+        def initializeData(self):
+                for currentSet in self.datasets:
+                    currentSet.initialize()
+                self.fullPlot.fullRoi.setState(self.datasets[self.selectedDataset].roi)
         def loadSetCallback(self):
-                self.dataString = self.dataTextBox.text().strip()
-                print('dataset: ', self.selectedDataset)
-                self.guiData = dataStruct.data(self.dataString)
-                self.guiData.findDataDirs()
-                self.guiData.initializeData()
-                self.guiData.readSet(self.selectedDataset)
-                self.datasetList.clear()
-                for dataset in self.guiData.rootFolders:
-                    print(dataset)
-                    self.datasetList.insertRow(self.datasetList.rowCount() )
-                    #[os.path.basename(os.path.normpath(dataset))]
-                self.plotWindow(1)
+                print('read: ', self.selectedDataset)
+                self.datasets[self.selectedDataset].readSet()
         def loadAllDataCallback(self):
                 self.dataString = self.dataTextBox.text().strip()
-                self.guiData = dataStruct.data(self.dataString)
-                self.guiData.readAll()
-                self.datasetList.clear()
-                for dataset in self.guiData.rootFolders:
+                self.searchDataCallback()
+                self.initializeData()
+                for dataset in self.datasets:
                     print(dataset)
-                    #self.datasetList.insert(tkinter.END, os.path.basename(os.path.normpath(dataset)))
-                    self.datasetList.insertRow(self.datasetList.rowCount())
+                    dataset.readSet()
+                    self.datasetList.insertRow(self.datasetList.rowCount() )
                 self.plotWindow(1)
-                #pdb.set_trace()
         def searchDataCallback(self):
                 self.dataString = self.dataTextBox.text().strip()
-                self.guiData = dataStruct.data(self.dataString)
-                self.guiData.findDataDirs()
-                self.guiData.initializeData()
-                #self.datasetList.clear()
+                self.findDataDirs()
+                self.initializeData()
+                self.scanSlider.setMaximum(len(self.datasets[self.selectedDataset].data)-1)
                 for row in np.arange(self.datasetList.rowCount()-1, -1, -1):
-                    print('row:', row)
                     self.datasetList.removeRow(row)
-                for dataset in self.guiData.rootFolders:
-                    self.datasets +=1
+                for dataset in self.datasets:
+                    self.ndatasets +=1
                     row = self.datasetList.rowCount()
                     self.datasetList.insertRow(row)
-                    self.datasetList.setItem(row,0, QTableWidgetItem(os.path.basename(os.path.normpath(dataset))))
-                self.guiData.rois[self.selectedDataset]=[100,50,200,200]
-                self.plotWindow(1)
-        def fftGuiData(self):
-                self.guiData.fft(omitSamples = int(self.omitSamplesTextBox.get("1.0",tkinter.END).strip()), sumScans = self.sumDataVar.get(), zeroFill = int(self.zeroFillStringVar.get()))
-                if self.sumDataVar.get():
-                        self.plotWindow(1)
-                else:
-                        self.plotWindow(1)
-        def raiseScanCallback(self):
-                if self.scanNumber < len(self.guiData.data[self.selectedDataset])-1:
-                        self.scanNumber +=1
-                        #self.scanNumberString.set(self.scanNumber)
-                self.setScanCallback()
-        def lowerScanCallback(self):
-                if self.scanNumber > 0:
-                        self.scanNumber -=1
-                        #self.scanNumberString.set(self.scanNumber)
+                    self.datasetList.setItem(row,0, QTableWidgetItem(os.path.basename(os.path.normpath(dataset.rootFolder))))
                 self.setScanCallback()
         def setDatasetCallback(self):
             if(self.datasetList.selectedItems()):
                 self.selectedDataset = self.datasetList.selectedItems()[0].row()
-                self.plotWindow(1)
+                self.fullPlot.fullRoi.setState(self.datasets[self.selectedDataset].roi)
+                self.scanSlider.setMaximum(len(self.datasets[self.selectedDataset].data)-1)
+                if self.scanNumber >= len(self.datasets[self.selectedDataset].data):
+                    self.scanNumber = len(self.datasets[self.selectedDataset].data)
+                    self.scanSlider.setValue(len(self.datasets[self.selectedDataset].data)-1)
+                else:
+                    self.scanSlider.setValue(self.scanNumber)
+                self.setScanCallback()
+        def scanSliderCallback(self):
+            self.scanNumber = self.scanSlider.value()
+            self.scanSliderLabel.setText(str(self.scanSlider.value()))
+            self.setScanCallback()
+        def textEditedCallback(self):
+            newScanNumber = -1
+            if self.scanSliderLabel.text() == '':
+                return
+            try:
+                newScanNumber = int(self.scanSliderLabel.text())
+                self.scanSliderLabel.setText('')
+            except:
+                print("Scan Number error: enter valid string to convert to int")
+                return
+            if newScanNumber < 0:
+                newScanNumberNumber = 0
+            if newScanNumber > len(self.datasets[self.selectedDataset].data):
+                newScanNumber = len(self.datasets[self.selectedDataset].data)-1
+            self.scanNumber = newScanNumber
+            self.setScanCallback()
+        def setSlider(self):
+            print('called')
+            self.scanSlider.blockSignals(True)
+            self.scanSlider.setValue(self.scanNumber)
+            self.scanSliderLabel.setText(str(self.scanSlider.value()))
+            self.scanSlider.blockSignals(False)
+        def raiseScanCallback(self):
+                if self.scanNumber < len(self.datasets[self.selectedDataset].data)-1:
+                    self.scanNumber +=1
+                    self.setScanCallback()
+        def lowerScanCallback(self):
+                if self.scanNumber > 0:
+                    self.scanNumber -=1
+                    self.setScanCallback()
         def setScanCallback(self):
-            #newNumber = int(self.scanNumberTextBox.text().strip())
             newNumber = self.scanNumber
-            if newNumber < len(self.guiData.data[self.selectedDataset])-1 and newNumber >= 0:
+            if not self.datasets[self.selectedDataset].data[self.scanNumber].any():
+                self.datasets[self.selectedDataset].readSingle(self.scanNumber)
+            #if self.datasets[self.selectedDataset].roiChanged[self.scanNumber]:
+            #    self.findCurrentEdges()
+            #self.findCurrentEdges()
+            if newNumber < len(self.datasets[self.selectedDataset].data)-1 and newNumber >= 0:
                 self.scanNumber = newNumber
             self.plotWindow(1)
-        def fitFunction(self, data, *parameters):
-                #return np.zeros(data.shape[0]) #real fit function is returned by self.guiData.fit
-                return parameters[0] / (np.pi * (data - parameters[1])**2/parameters[2] + (parameters[2]))
-        def setPhase(self, scanNumber):
-                if self.sumDataVar.get():
-                        self.guiData.summedPhase = float(self.phaseStringVar.get())
-                        self.plotWindow(1)
-                else:
-                        self.guiData.phase[scanNumber] = float(self.phaseStringVar.get())
-                        self.plotWindow(1)
-        def fitGuiData(self):
-                frequency = float(self.frequencyParameter.get()) if self.frequencyParameter.get() else (int(self.maxFrequencyEntry.get())+int(self.minFrequencyEntry.get()))/2
-                width = float(self.widthParameter.get()) if self.widthParameter.get() else (int(self.maxFrequencyEntry.get())-int(self.minFrequencyEntry.get()))/100
-                #height = self.heightParameter.get() if self.heightParameter.get() else np.max(self.guiData.fftData[self.scanNumber])
-                if self.heightParameter.get():
-                        height = float(self.heightParameter.get())
-                elif self.guiData.summedFftData.any():
-                        height = np.real(np.max(self.guiData.summedFftData[self.guiData.getIndex(int(self.minFrequencyEntry.get())):self.guiData.getIndex(int(self.maxFrequencyEntry.get()))]))
-                elif self.guiData.fftData.any():
-                        height = np.real(np.max(self.guiData.fftData[self.scanNumber, self.guiData.getIndex(int(self.minFrequencyEntry.get())):self.guiData.getIndex(int(self.maxFrequencyEntry.get()))]))
-                else:
-                        height = 1;
-                if self.sumDataVar.get():
-                        self.guiData.summedFitParameters = [height, frequency, width]
-                else:
-                        self.guiData.fitParameters[self.scanNumber] = [height, frequency, width]
-                self.fitFunction, tempParameters = self.guiData.fit(int(self.minFrequencyEntry.get()), int(self.maxFrequencyEntry.get()), self.scanNumber, self.guiData.function, self.sumDataVar.get())
-                if self.sumDataVar.get():
-                        self.guiData.summedFitParameters = tempParameters[0]
-                else:
-                        self.guiData.fitParameters[self.scanNumber] = tempParameters[0]
-                self.frequencyParameter.delete(0,tkinter.END)
-                self.widthParameter.delete(0,tkinter.END)
-                self.heightParameter.delete(0,tkinter.END)
-                self.frequencyParameter.insert(0, tempParameters[0][1])
-                self.widthParameter.insert(0,tempParameters[0][2])
-                self.heightParameter.insert(0, tempParameters[0][0])
-
-                self.plotWindow(1)
-                self.guiData.saveParameters()
-        def plotExternal(self):
-            if plt.fignum_exists(0):
-                plt.clf()
-            plt.figure(0, figsize=[6,3])
-            plt.xlabel('f / MHz')
-            plt.ylabel('signal / a.u.')
-            if self.guiData:
-                    lowerIndex = self.guiData.getIndex(int(self.minFrequencyEntry.get()))
-                    upperIndex = self.guiData.getIndex(int(self.maxFrequencyEntry.get()))
-                    if self.sumDataVar.get():
-                        self.guiData.fft(omitSamples = 1000, sumScans = self.sumDataVar.get(), zeroFill = int(self.zeroFillStringVar.get()))
-                        plt.plot(self.guiData.frequencies[lowerIndex:upperIndex]/1e6, 100 * np.real(cmath.exp(1j*self.guiData.summedPhase)*  self.guiData.summedFftData[-self.guiData.frequencies.size+lowerIndex:-self.guiData.frequencies.size+upperIndex]), label='1000 samples x 100')
-                        self.guiData.fft(omitSamples = 500, sumScans = self.sumDataVar.get(), zeroFill = int(self.zeroFillStringVar.get()))
-                        plt.plot(self.guiData.frequencies[lowerIndex:upperIndex]/1e6, np.real(cmath.exp(1j*self.guiData.summedPhase)*  self.guiData.summedFftData[-self.guiData.frequencies.size+lowerIndex:-self.guiData.frequencies.size+upperIndex]), label = '500 samples')
-            plt.legend()
-            #plt.savefig('/home/philipp/Documents/thesis/figures/experiments/lowFieldSpectrometer/niNetworkAnalysis.pdf')
-            plt.show()
-        def plotWindow(self, plotMain):
-                #try:
-                if not self.guiData.data[self.selectedDataset][self.scanNumber].any():
-                    self.guiData.readSingle(self.selectedDataset, self.scanNumber)
-                    print('plot: reading single')
-                #self.fullPlot.clear()
-                if(plotMain):
-                    self.fullPlot.setImage(self.guiData.data[self.selectedDataset][self.scanNumber][:,:,1])
-                #self.fullPlot.plot(self.guiData.data[self.selectedDataset][self.scanNumber])
-                if self.guiData.rois[self.selectedDataset][2]+self.guiData.rois[self.selectedDataset][3]:
-                    self.roiPlot.setImage(self.guiData.data[self.selectedDataset][self.scanNumber][self.guiData.rois[self.selectedDataset][1]:self.guiData.rois[self.selectedDataset][1]+self.guiData.rois[self.selectedDataset][3],self.guiData.rois[self.selectedDataset][0]:self.guiData.rois[self.selectedDataset][0]+self.guiData.rois[self.selectedDataset][2],:][:,:,0])
-                else:
-                    self.roiPlot.setImage(self.guiData.data[self.selectedDataset][self.scanNumber][:,:,0])
-                if self.guiData.edgeData[self.selectedDataset][self.scanNumber].any():
-                    self.edgePlot.setImage(self.guiData.edgeData[self.selectedDataset][self.scanNumber])
-                    #self.subplotEdges.setImage(self.guiData.data[self.selectedDataset][self.scanNumber])
-                elif self.guiData.rois[self.selectedDataset][2]+self.guiData.rois[self.selectedDataset][3]:
-                    self.findCurrentEdges()
-                    self.edgePlot.setImage(self.guiData.edgeData[self.selectedDataset][self.scanNumber])
-                #self.plotCanvas.draw()
-                #image = pyqtgraph.imageview(self.guiData.edgeData[self.selectedDataset][self.scanNumber])
-                #image.show()
-                #self.findCurrentEdges()for testing only
-                        #plt.imshow(self.guiData.data[self.selectedDataset][scanNumber])
-                        #plt.show()
-                #except AttributeError:
-                #        print("Please load a dataset")
-                #except IndexError:
-                #        print("Please check parameters")
-                #except ValueError:
-                #        print("wrong parameters entered")
-                #self.minFrequencyEntry.focus_set()
+            self.setSlider()
+        def savePlotsCallback(self):
+            resolution = 400
+            saveTo = self.saveToTextBox.text()
+            fullPlotExporter = pg.exporters.ImageExporter(self.fullPlot.getImageItem())
+            fullPlotExporter.parameters().param('width').setValue(resolution, blockSignal=fullPlotExporter.widthChanged)
+            fullPlotExporter.parameters().param('height').setValue(resolution, blockSignal=fullPlotExporter.heightChanged)
+            fullPlotExporter.export(os.path.join(self.datasets[self.selectedDataset].rootFolder,saveTo + 'full.png'))
+            resolution = 400
+            resultPlotExporter = pg.exporters.ImageExporter(self.resultPlot.getPlotItem())
+            resultPlotExporter.parameters().param('width').setValue(resolution*2, blockSignal=resultPlotExporter.widthChanged)
+            resultPlotExporter.parameters().param('height').setValue(resolution, blockSignal=resultPlotExporter.heightChanged)
+            resultPlotExporter.export(os.path.join(self.datasets[self.selectedDataset].rootFolder,saveTo + 'result.png'))
+        def plotWindow(self, plotMain, autoZoom = False):
+                print(self.selectedDataset, self.scanNumber)
+                try:
+                    if(plotMain):
+                        self.fullPlot.setImage(self.datasets[self.selectedDataset].data[self.scanNumber][:,:,1], autoRange=autoZoom)
+                except:
+                    print('could not plot main image, probably empty')
+                try:
+                    if self.fullPlot.fullRoi.size()[0]:
+                        self.roiPlot.setImage(self.datasets[self.selectedDataset].data[self.scanNumber][int(self.fullPlot.fullRoi.pos()[0]):int(self.fullPlot.fullRoi.pos()[0])+int(self.fullPlot.fullRoi.size()[0]), int(self.fullPlot.fullRoi.pos()[1]):int(self.fullPlot.fullRoi.pos()[1])+int(self.fullPlot.fullRoi.size()[1]),:][:,:,0])
+                    else:
+                        self.roiPlot.setImage(self.datasets[self.selectedDataset].data[self.scanNumber][:,:,0])
+                except:
+                    print('could not plot Roi image, probably empty')
+                try:
+                    if self.datasets[self.selectedDataset].edgeData[self.scanNumber].any():
+                        self.edgePlot.setImage(self.datasets[self.selectedDataset].edgeData[self.scanNumber])
+                    elif self.fullPlot.fullRoi.size()[0]+self.fullPlot.fullRoi.size()[1]:
+                        self.findCurrentEdges()
+                        self.edgePlot.setImage(self.datasets[self.selectedDataset].edgeData[self.scanNumber])
+                except:
+                    print('could not plot Roi image, probably empty')
+                self.updateResultPlot()
         def defineRoi(self):
-            subImageRoi = cv2.selectROI('ROI selection', self.guiData.data[self.selectedDataset][self.scanNumber])
-            self.guiData.rois[self.selectedDataset] = subImageRoi
+            subImageRoi = cv2.selectROI('ROI selection', self.datasets[self.selectedDataset].data[self.scanNumber])
+            self.datasets[self.selectedDataset].roi = subImageRoi
             self.findCurrentEdges()
             cv2.destroyWindow('ROI selection')
             self.plotWindow(1)
-        def findCurrentEdges(self):
-            if self.guiData.rois[self.selectedDataset][2]+self.guiData.rois[self.selectedDataset][3]:
-                print('roi found')
-                labelImage = self.guiData.data[self.selectedDataset][self.scanNumber][self.guiData.rois[self.selectedDataset][1]:self.guiData.rois[self.selectedDataset][1]+self.guiData.rois[self.selectedDataset][3],self.guiData.rois[self.selectedDataset][0]:self.guiData.rois[self.selectedDataset][0]+self.guiData.rois[self.selectedDataset][2],:]
-                edges = cv2.Canny(self.guiData.data[self.selectedDataset][self.scanNumber][self.guiData.rois[self.selectedDataset][1]:self.guiData.rois[self.selectedDataset][1]+self.guiData.rois[self.selectedDataset][3],self.guiData.rois[self.selectedDataset][0]:self.guiData.rois[self.selectedDataset][0]+self.guiData.rois[self.selectedDataset][2],:], self.lowerLimit, self.upperLimit)
+        def setEdgeLimits(self):
+            self.lowerLimit = self.lowerLimitSlider.value()
+            self.lowerLimitLabel.setText(str(self.lowerLimit))
+            self.upperLimit = self.upperLimitSlider.value()
+            self.upperLimitLabel.setText(str(self.upperLimit))
+            self.findCurrentEdges()
+            self.plotWindow(0)
+        def findCurrentEdges(self, scanNumber = -1):
+            if scanNumber == -1:
+                scanNumber = self.scanNumber
+            if self.fullPlot.fullRoi.size()[0] and self.fullPlot.fullRoi.size()[1]:
+                labelImage = self.datasets[self.selectedDataset].data[scanNumber][int(self.fullPlot.fullRoi.pos()[0]):int(self.fullPlot.fullRoi.pos()[0])+int(self.fullPlot.fullRoi.size()[0]),int(self.fullPlot.fullRoi.pos()[1]):int(self.fullPlot.fullRoi.pos()[1])+int(self.fullPlot.fullRoi.size()[1]),:]
+                #try:
+                edges = cv2.Canny(labelImage, self.lowerLimit, self.upperLimit)
                 edges, labelImage = cv2.connectedComponents(edges)
-                self.guiData.edgeData[self.selectedDataset][self.scanNumber] = labelImage
-                #self.subplotEdges.imshow(self.guiData.edgeData[self.selectedDataset][self.scanNumber])
-                #self.plotCanvas.draw()
+                self.datasets[self.selectedDataset].edgeData[scanNumber] = labelImage
+                    #if self.datasets[self.selectedDataset].edgeData[self.scanNumber].any():#edges[scanNumber].any():
+                        #self.plotWindow(0)
+                #except:
+                #    print('Error finding current edges')
             else:
                 print('Roi misdefinded or no roi found')
+        def findAllEdges(self):
+            self.loadSetCallback()
+            for scanNumber in np.arange(len(self.datasets[self.selectedDataset].data)):
+                self.scanNumber = scanNumber
+                self.findCurrentEdges()
         def calculateThickness(self):
-            if self.guiData.edgeData[self.selectedDataset][self.scanNumber].any():
-                readVectorY = np.arange(self.guiData.edgeData[self.selectedDataset][self.scanNumber].shape[0])
-                readVectorX = np.arange(self.guiData.edgeData[self.selectedDataset][self.scanNumber].shape[1])
-                edge1 = np.where(self.guiData.edgeData[self.selectedDataset][self.scanNumber]==1, 1, 0)
-                edge2 = np.where(self.guiData.edgeData[self.selectedDataset][self.scanNumber]==2, 1, 0)
+            self.findCurrentEdges()
+            if np.any(self.datasets[self.selectedDataset].edgeData[self.scanNumber] == 3):
+                return np.nan # No thickness if more than 2 edges detected
+            if self.datasets[self.selectedDataset].edgeData[self.scanNumber].any():
+                readVectorY = np.arange(self.datasets[self.selectedDataset].edgeData[self.scanNumber].shape[0])
+                readVectorX = np.arange(self.datasets[self.selectedDataset].edgeData[self.scanNumber].shape[1])
+                edge1 = np.where(self.datasets[self.selectedDataset].edgeData[self.scanNumber]==1, 1, 0)
+                edge2 = np.where(self.datasets[self.selectedDataset].edgeData[self.scanNumber]==2, 1, 0)
                 n1 = np.sum(edge1)
                 n2 = np.sum(edge2)
                 x1 = np.sum(np.dot(edge1, readVectorX)/n1)
                 y1 = np.sum(np.dot(np.transpose(edge1), readVectorY))/n1
                 x2 = np.sum(np.dot(edge2, readVectorX)/n2)
                 y2 = np.sum(np.dot(np.transpose(edge2), readVectorY))/n2
-                #pdb.set_trace()
-                print(np.abs(x2 - x1))
-                return(np.abs(x2 - x1))
+                return(np.abs(x2 - x1)) # thickness as the distance of the centers of mass
             else:
                 return(np.nan)
-        def findAllEdges(self):
-            for scanNumber in np.arange(4,len(self.guiData.data[self.selectedDataset])):
-                self.scanNumber = scanNumber
-                self.findCurrentEdges()
-            #self.plotCanvas.draw()
         def calculateAllThicknesses(self):
-            if self.roiChanged:
-                self.findAllEdges()
-            self.scanNumber = 0
-            for image in self.guiData.data[self.selectedDataset]:
+            currentViewNumber = self.scanNumber
+            if not self.datasets[self.selectedDataset].setLoaded:
+                self.datasets[self.selectedDataset].readSet()
+            self.findAllEdges()
+            for index, image in enumerate(self.datasets[self.selectedDataset].data):
+                self.scanNumber = index
                 if image.any():
-                    print('image found, calc...')
-                    self.guiData.thicknesses[self.selectedDataset][self.scanNumber] = self.calculateThickness()
+                    self.datasets[self.selectedDataset].thicknesses[self.scanNumber] = self.calculateThickness()
                 else:
-                    print('image not found, laoding and calc...')
-                    self.guiData.readSingle(self.selectedDataset, self.scanNumber)
+                    print('image not found, loading and calc...')
+                    self.datasets[self.selectedDataset].readSingle(self.scanNumber)
                     self.findCurrentEdges()
-                    self.guiData.thicknesses[self.selectedDataset][self.scanNumber] = self.calculateThickness()
-                self.scanNumber +=1
-            self.scanNumber = 4
-            print('thicknesses calculated')
-            print(self.guiData.thicknesses[self.selectedDataset] )
-            #self.resultPlot.plot(np.arange(len(self.guiData.thicknesses[self.selectedDataset])), self.guiData.thicknesses[self.selectedDataset])
+                    self.datasets[self.selectedDataset].thicknesses[self.scanNumber] = self.calculateThickness()
+            self.updateResultPlot()
+            self.scanNumber = currentViewNumber
+        def updateResultPlot(self):
+            plotNumbers = []
+            plotThicknesses =[]
+            for scanNumber, thickness in enumerate(self.datasets[self.selectedDataset].thicknesses):
+                if not type(self.datasets[self.selectedDataset].thicknesses[scanNumber]) == type(np.nan):
+                    plotNumbers.append(scanNumber)
+                    plotThicknesses.append(thickness)
+            #self.resultPlot.plot(self.datasets[self.selectedDataset].thicknesses[4:-1])#, connect=np.logical_and(con, np.roll(con, -1)))
             self.resultPlot.clear()
-            self.resultPlot.plot(self.guiData.thicknesses[self.selectedDataset][4:-1])
-            #pdb.set_trace()
-        def saveCallback(self):
-            self.saveString = self.saveStringTextBox.get("1.0", tkinter.END).rstrip()
-            print( 'saveString' + self.saveString)
-            print(self.saveString + '/' +  os.path.splitext(os.path.basename(self.dataString))[0] + '.pdf')
-            self.figure.savefig(self.saveString + '/' +  os.path.splitext(os.path.basename(self.dataString))[0] + '.pdf')
+            self.resultPlot.plot(plotNumbers, plotThicknesses)
+        def copyRoiCallback(self):
+            self.roiClipboard = self.fullPlot.fullRoi.saveState()
+        def pasteRoiCallback(self):
+            self.fullPlot.fullRoi.setState(self.roiClipboard)
+        def pasteRoiToAll(self):
+            for dataset in  self.datasets:
+                dataset.roi = self.roiClipboard
+        def saveRoiCallback(self):
+            saveString = os.path.join(self.datasets[self.selectedDataset].rootFolder, 'roi.pickle')
+            with open(saveString, 'wb') as roiFile:
+                pickle.dump(self.datasets[self.selectedDataset].roi, roiFile)
+            print( 'ROI saved as: ' + saveString)
+        def saveAllRoisCallback(self):
+            for dataset in self.datasets:
+                saveString = os.path.join(dataset.rootFolder, 'roi.pickle')
+                with open(saveString, 'wb') as roiFile:
+                    pickle.dump(self.datasets[self.selectedDataset].roi, roiFile)
+                print( 'ROI saved as: ' + saveString)
+        def deleteRoiCallback(self):
+            self.fullPlot.fullRoi.setState(self.roiClipboard)
+            roiString = os.path.join(self.datasets[self.selectedDataset].rootFolder, 'roi.pickle')
+            with open(saveString, 'wb') as roiFile:
+                pickle.dump(self.datasets[self.selectedDataset].roi, roiFile)
+            print( 'ROI saved as: ' + saveString)
         def closeCallback(self):
                 self.top.destroy()

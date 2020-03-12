@@ -5,6 +5,9 @@ import cmath
 import pdb
 import cv2
 import matplotlib.pyplot as plt
+import pyqtgraph as pg
+import pickle
+from customDebug import set_trace
 #from scipy.optimize import curve_fit
 from PIL import Image
 class data:
@@ -13,18 +16,18 @@ class data:
                 self.imagesets = 0
                 self.nScans = 0
                 self.images = 0
+                self.loaded = []
                 self.fullPath = path
-                self.overrideType = 0
-                self.rootFolders = []
+                self.rootFolder = path
                 self.imageFiles = []
-                self.filetype = 'png'
                 self.maxResolution = 512
+                self.setLoaded = 0
 
                 #self.data = np.array([])
                 self.data = []
                 self.edgeData = []
                 self.thicknesses = []
-                self.rois=[]
+                self.roi= pg.ROI([200,200],[100,100]).saveState()
 
                 self.timePoints = []
                 self.samples = 0
@@ -35,57 +38,34 @@ class data:
                 #self.summedPhase = 0
                 #self.function = 0
                 #self.numberOfParameters = np.array((3,3))
-        def readAll(self):
-                self.findDataDirs()
-                setNumber = 0
-                for currentSet in self.rootFolders:
-                    images = []
-                    edgeDataRow = []
-                    for imageFile in self.imageFiles[setNumber]:
-                        print(imageFile)
-                        images.append(cv2.imread(os.path.join(currentSet, 'images', imageFile)))
-                        edgeDataRow.append(np.zeros(2))
-                    setNumber += 1
-                    self.data.append(images)
-                    self.edgeData.append(edgeDataRow)
-        def readSingle(self, datasetNumber, scanNumber):
-            self.data[datasetNumber][scanNumber] = cv2.imread(os.path.join(self.rootFolders[datasetNumber], 'images', self.imageFiles[datasetNumber][scanNumber]))
-            self.edgeData[datasetNumber][scanNumber] = np.zeros(self.data[datasetNumber][scanNumber].shape)
-            self.thicknesses[datasetNumber][scanNumber] = 0
-        def readSet(self, datasetNumber):
-            for scanNumber in np.arange(len(self.data[datasetNumber])):
-                self.data[datasetNumber][scanNumber] = cv2.imread(os.path.join(self.rootFolders[datasetNumber], 'images', self.imageFiles[datasetNumber][scanNumber]))
-                self.edgeData[datasetNumber][scanNumber] = np.zeros(self.data[datasetNumber][scanNumber].shape)
-                self.thicknesses[datasetNumber][scanNumber] = 0
-        #def read(self):
-        #        self.find()
-        #        for currentSet in self.rootFolders:
-        #            #self.data[dataSetNumber] = np.empty(Image.open(os.path.join(currentSet, "images", imageFiles[0])).size)
-        #            images = []
-        #            for imageFile in self.imageFiles:
-        #                images.append(cv2.imread(os.path.join(currentSet, "images", imageFile)))
-        #            self.data.append(images)
-        #        self.edgeData = self.data
-        ##def readSingle(self):
+        def readSingle(self, scanNumber):
+            self.data[scanNumber] = cv2.imread(os.path.join(self.rootFolder, 'images', self.imageFiles[scanNumber]))
+            self.edgeData[scanNumber] = np.zeros(self.data[scanNumber].shape)
+            self.thicknesses[scanNumber] = 0
+            self.loaded[scanNumber] = 1
+        def readSet(self):
+            for scanNumber, image in enumerate(self.data):
+                if not image.any():
+                    self.readSingle(scanNumber)
+                    self.edgeData[scanNumber] = np.zeros(self.data[scanNumber].shape)
+                    self.thicknesses[scanNumber] = 0
+                    self.loaded[scanNumber] = 1
+            self.setLoaded = 1
+        def initialize(self):
+            saveString = os.path.join(self.rootFolder, 'roi.pickle')
+            if os.path.exists(saveString):
+                with open(saveString, 'rb') as roiFile:
+                    print('loading roi from disk')
+                    self.roi = pickle.load(roiFile)
+            self.data = ([np.zeros((1,1,3))] * len(self.imageFiles))
+            self.edgeData = ([np.zeros(1)] * len(self.imageFiles))
+            self.thicknesses = ([np.nan] * len(self.imageFiles))
+            self.loaded = ([0] * len(self.imageFiles))
 
-        def findDataDirs(self):
-                if self.overrideType != 0:
-                        self.filetype = 'png' #read from text field later
-                for root, dirs, files in os.walk(self.fullPath):
-                    if "images" in dirs:
-                        self.rootFolders.append(root)
-                self.nImagesets = np.size(self.rootFolders)
-                self.rois = np.zeros((self.nImagesets, 4),dtype=int)
-                for currentSet in self.rootFolders:
-                    self.imageFiles.append( [files for files in os.listdir(os.path.join(currentSet, "images" )) if files.endswith('.'+ self.filetype)])
-        def initializeData(self):
-                setNumber = 0
-                print(self.rootFolders)
-                for currentSet in self.rootFolders:
-                    self.data.append ([np.zeros((1,1,3))] * len(self.imageFiles[setNumber]))
-                    self.edgeData.append([np.zeros(1)] * len(self.imageFiles[setNumber]))
-                    self.thicknesses.append([np.nan] * len(self.imageFiles[setNumber]))
-                    setNumber += 1
+            #for scanNumber in np.arange(len(self.data)):
+            #    self.data[scanNumber] = cv2.imread(os.path.join(self.rootFolder, 'images', self.imageFiles[scanNumber]))
+            #    self.edgeData[scanNumber] = np.zeros(self.data[scanNumber].shape)
+            #    self.thicknesses[scanNumber] = 0
                 #self.data = np.array([self.nImagesets])
 
                 ##Read rois from file if exists
@@ -152,7 +132,6 @@ class data:
                                 readList  = list((float(number) for number in fullFile.readline().strip().split()))
                                 self.summedFitParameters = readList[0:len(readList) - 1]
                                 self.summedPhase = readList[len(readList) - 1]
-                                print(self.summedFitParameters)
                                 for line in fullFile:
                                         readList  = list((float(number) for number in line.strip().split()))
                                         self.fitParameters[lineNumber] = readList[0:len(readList) - 1]
